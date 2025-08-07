@@ -11,6 +11,8 @@ const SnakeGame = () => {
   const [gameOver, setGameOver] = useState(false);
   const [score, setScore] = useState(0);
   const [gameStarted, setGameStarted] = useState(false);
+  const [timeLeft, setTimeLeft] = useState(10);
+  const [gameOverReason, setGameOverReason] = useState('');
   
   // Use refs for immediate access to current values
   const directionRef = useRef(INITIAL_DIRECTION);
@@ -51,6 +53,8 @@ const SnakeGame = () => {
     setGameOver(false);
     setScore(0);
     setGameStarted(true);
+    setTimeLeft(10);
+    setGameOverReason('');
   };
 
   const moveSnake = useCallback(() => {
@@ -85,6 +89,7 @@ const SnakeGame = () => {
       // Check self collision
       if (newSnake.some(segment => segment.x === head.x && segment.y === head.y)) {
         setGameOver(true);
+        setGameOverReason('Hit your own body!');
         return prevSnake;
       }
 
@@ -94,6 +99,7 @@ const SnakeGame = () => {
       if (head.x === food.x && head.y === food.y) {
         setScore(prev => prev + 10);
         setFood(generateFood(newSnake)); // Pass the updated snake to avoid spawning on it
+        setTimeLeft(10); // Reset timer when food is eaten
       } else {
         newSnake.pop();
       }
@@ -174,6 +180,24 @@ const SnakeGame = () => {
     return () => clearInterval(gameInterval);
   }, [moveSnake]);
 
+  // Timer countdown effect
+  useEffect(() => {
+    if (!gameStarted || gameOver) return;
+
+    const timerInterval = setInterval(() => {
+      setTimeLeft(prev => {
+        if (prev <= 1) {
+          setGameOver(true);
+          setGameOverReason('Time\'s up!');
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timerInterval);
+  }, [gameStarted, gameOver]);
+
   const renderBoard = () => {
     const board = [];
     for (let y = 0; y < BOARD_SIZE; y++) {
@@ -218,6 +242,12 @@ const SnakeGame = () => {
         Score: <span className="text-yellow-400 font-bold">{score}</span>
       </div>
 
+      <div className="mb-4 text-xl">
+        Time: <span className={`font-bold ${timeLeft <= 3 ? 'text-red-400 animate-pulse' : 'text-blue-400'}`}>
+          {timeLeft}s
+        </span>
+      </div>
+
       <div 
         className="grid gap-0 border-2 border-green-400 mb-4 bg-gray-800"
         style={{
@@ -243,7 +273,8 @@ const SnakeGame = () => {
 
       {gameOver && (
         <div className="text-center">
-          <h2 className="text-2xl font-bold text-red-400 mb-4">Game Over!</h2>
+          <h2 className="text-2xl font-bold text-red-400 mb-2">Game Over!</h2>
+          <p className="text-lg text-red-300 mb-4">{gameOverReason}</p>
           <p className="mb-4">Final Score: {score}</p>
           <button 
             onClick={resetGame}
@@ -258,6 +289,7 @@ const SnakeGame = () => {
         <div className="text-center text-gray-400">
           <p>Use arrow keys to move</p>
           <p className="text-sm mt-2">Eat the red food to grow and score points!</p>
+          <p className="text-sm mt-1 text-yellow-300">Eat food before time runs out!</p>
         </div>
       )}
     </div>
