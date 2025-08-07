@@ -8,7 +8,6 @@ const INITIAL_DIRECTION = { x: 0, y: -1 };
 const SnakeGame = () => {
   const [snake, setSnake] = useState(INITIAL_SNAKE);
   const [food, setFood] = useState(INITIAL_FOOD);
-  const [direction, setDirection] = useState(INITIAL_DIRECTION);
   const [gameOver, setGameOver] = useState(false);
   const [score, setScore] = useState(0);
   const [gameStarted, setGameStarted] = useState(false);
@@ -28,7 +27,6 @@ const SnakeGame = () => {
   const resetGame = () => {
     setSnake(INITIAL_SNAKE);
     setFood(INITIAL_FOOD);
-    setDirection(INITIAL_DIRECTION);
     directionRef.current = INITIAL_DIRECTION;
     directionQueueRef.current = [];
     setGameOver(false);
@@ -43,7 +41,6 @@ const SnakeGame = () => {
     if (directionQueueRef.current.length > 0) {
       const nextDirection = directionQueueRef.current.shift();
       directionRef.current = nextDirection;
-      setDirection(nextDirection);
     }
 
     setSnake(prevSnake => {
