@@ -16,12 +16,31 @@ const SnakeGame = () => {
   const directionRef = useRef(INITIAL_DIRECTION);
   const directionQueueRef = useRef([]);
 
-  const generateFood = useCallback(() => {
-    const newFood = {
-      x: Math.floor(Math.random() * BOARD_SIZE),
-      y: Math.floor(Math.random() * BOARD_SIZE)
-    };
-    return newFood;
+  const generateFood = useCallback((currentSnake) => {
+    // Create array of all empty positions
+    const emptyPositions = [];
+    
+    for (let y = 0; y < BOARD_SIZE; y++) {
+      for (let x = 0; x < BOARD_SIZE; x++) {
+        // Check if this position is occupied by snake
+        const isOccupied = currentSnake.some(segment => 
+          segment.x === x && segment.y === y
+        );
+        
+        if (!isOccupied) {
+          emptyPositions.push({ x, y });
+        }
+      }
+    }
+    
+    // Pick random empty position
+    if (emptyPositions.length === 0) {
+      // Game won - no empty spaces left (extremely rare)
+      return { x: 0, y: 0 };
+    }
+    
+    const randomIndex = Math.floor(Math.random() * emptyPositions.length);
+    return emptyPositions[randomIndex];
   }, []);
 
   const resetGame = () => {
@@ -74,7 +93,7 @@ const SnakeGame = () => {
       // Check food collision
       if (head.x === food.x && head.y === food.y) {
         setScore(prev => prev + 10);
-        setFood(generateFood());
+        setFood(generateFood(newSnake)); // Pass the updated snake to avoid spawning on it
       } else {
         newSnake.pop();
       }
