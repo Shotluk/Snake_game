@@ -5,6 +5,13 @@ const CANVAS_HEIGHT = 600;
 const SEGMENT_SPACING = 8; // distance between body segments
 const INITIAL_LENGTH = 15; // number of segments
 
+// Shooting mechanics
+const PROJECTILE_SPEED = 8;
+const PROJECTILE_LIFETIME = 1500; // milliseconds
+const SHOOT_COOLDOWN = 1000; // milliseconds between shots
+const SLOW_DURATION = 1000; // milliseconds of slow effect
+const SLOW_FACTOR = 0; // speed multiplier when slowed (40% speed)
+
 // Difficulty settings - easily configurable
 const DIFFICULTY_SETTINGS = {
   easy: {
@@ -28,11 +35,15 @@ const SnakeGame = () => {
   const [gameOver, setGameOver] = useState(false);
   const [gameStarted, setGameStarted] = useState(false);
   const [score, setScore] = useState(0);
+  const [score2, setScore2] = useState(0); // Player 2 score
   const [snakeLengthDisplay, setSnakeLengthDisplay] = useState(INITIAL_LENGTH);
+  const [snake2LengthDisplay, setSnake2LengthDisplay] = useState(INITIAL_LENGTH); // Player 2 length
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [canvasSize, setCanvasSize] = useState({ width: CANVAS_WIDTH, height: CANVAS_HEIGHT });
   const [gameOverReason, setGameOverReason] = useState('');
   const [difficulty, setDifficulty] = useState('easy');
+  const [gameMode, setGameMode] = useState('single'); // 'single' or 'multiplayer'
+  const [winner, setWinner] = useState(''); // Track who won in multiplayer
   const [currentSpeedDisplay, setCurrentSpeedDisplay] = useState(DIFFICULTY_SETTINGS.easy.speed);
   const currentSpeedRef = useRef(DIFFICULTY_SETTINGS.easy.speed);
   
@@ -42,19 +53,132 @@ const SnakeGame = () => {
     angle: 0, // current facing direction in radians (0 = right, Math.PI/2 = down)
     targetAngle: 0, // where we want to turn towards
     body: [], // array of {x, y} positions for body segments
-    length: INITIAL_LENGTH // actual length
+    length: INITIAL_LENGTH, // actual length
+    alive: true,
+    slowedUntil: 0, // timestamp when slow effect ends
+    shootCooldown: 0, // timestamp when can shoot again
+    canShoot: true
+  });
+  
+  // Player 2 snake (blue snake)
+  const snake2Ref = useRef({
+    head: { x: CANVAS_WIDTH / 2, y: CANVAS_HEIGHT / 2 },
+    angle: Math.PI, // facing left
+    targetAngle: Math.PI,
+    body: [],
+    length: INITIAL_LENGTH,
+    alive: true,
+    slowedUntil: 0,
+    shootCooldown: 0,
+    canShoot: true
   });
   
   const foodRef = useRef({ x: 0, y: 0 });
   
+  // Projectiles array
+  const projectilesRef = useRef([]);
+  
   const keysPressed = useRef({
-    ArrowUp: false,
-    ArrowDown: false,
     ArrowLeft: false,
-    ArrowRight: false
+    ArrowRight: false,
+    ArrowUp: false,   // Player 1 shoot
+    KeyA: false,
+    KeyD: false,
+    KeyW: false       // Player 2 shoot
   });
 
-  // Generate food at random position (avoiding snake)
+  // Shooting function
+  const shoot = (snake, playerNumber) => {
+    const now = Date.now();
+    
+    // Check cooldown
+    if (now < snake.shootCooldown) {
+      return;
+    }
+    
+    // Create projectile
+    const projectile = {
+      x: snake.head.x,
+      y: snake.head.y,
+      angle: snake.angle,
+      vx: Math.cos(snake.angle) * PROJECTILE_SPEED,
+      vy: Math.sin(snake.angle) * PROJECTILE_SPEED,
+      owner: playerNumber, // 1 or 2
+      createdAt: now,
+      color: playerNumber === 1 ? '#22c55e' : '#3b82f6'
+    };
+    
+    projectilesRef.current.push(projectile);
+    
+    // Set cooldown
+    snake.shootCooldown = now + SHOOT_COOLDOWN;
+  };
+
+  // Update projectiles
+  const updateProjectiles = () => {
+    const now = Date.now();
+    const worldWidth = canvasSize.width;
+    const worldHeight = canvasSize.height;
+    
+    // Update positions and remove expired projectiles
+    projectilesRef.current = projectilesRef.current.filter(proj => {
+      // Remove if expired
+      if (now - proj.createdAt > PROJECTILE_LIFETIME) {
+        return false;
+      }
+      
+      // Move projectile
+      proj.x += proj.vx;
+      proj.y += proj.vy;
+      
+      // Wrap around screen
+      if (proj.x < 0) proj.x = worldWidth;
+      if (proj.x > worldWidth) proj.x = 0;
+      if (proj.y < 0) proj.y = worldHeight;
+      if (proj.y > worldHeight) proj.y = 0;
+      
+      return true;
+    });
+  };
+
+  // Check projectile collisions
+  const checkProjectileCollisions = () => {
+    const now = Date.now();
+    
+    projectilesRef.current = projectilesRef.current.filter(proj => {
+      // Check collision with Player 1
+      if (proj.owner === 2 && snakeRef.current.alive) {
+        const distanceToP1 = Math.sqrt(
+          Math.pow(proj.x - snakeRef.current.head.x, 2) + 
+          Math.pow(proj.y - snakeRef.current.head.y, 2)
+        );
+        
+        if (distanceToP1 < 10) {
+          // Hit! Apply slow effect
+          snakeRef.current.slowedUntil = now + SLOW_DURATION;
+          return false; // Remove projectile
+        }
+      }
+      
+      // Check collision with Player 2
+      if (proj.owner === 1 && snake2Ref.current.alive && gameMode === 'multiplayer') {
+        const distanceToP2 = Math.sqrt(
+          Math.pow(proj.x - snake2Ref.current.head.x, 2) + 
+          Math.pow(proj.y - snake2Ref.current.head.y, 2)
+        );
+        
+        if (distanceToP2 < 10) {
+          // Hit! Apply slow effect
+          snake2Ref.current.slowedUntil = now + SLOW_DURATION;
+          return false; // Remove projectile
+        }
+      }
+      
+      return true; // Keep projectile
+    });
+  };
+
+  // Generate food at random position (avoiding both snakes)
   const generateFood = () => {
     let newFood;
     let validPosition = false;
@@ -68,17 +192,23 @@ const SnakeGame = () => {
         y: Math.random() * (worldHeight - 40) + 20
       };
       
-      // Check if food is too close to snake head or body
-      const snake = snakeRef.current;
-      const distanceToHead = Math.sqrt(
-        Math.pow(newFood.x - snake.head.x, 2) + 
-        Math.pow(newFood.y - snake.head.y, 2)
-      );
+      validPosition = true;
       
-      validPosition = distanceToHead > 50;
+      // Check distance to both snakes
+      const snakes = gameMode === 'multiplayer' ? [snakeRef.current, snake2Ref.current] : [snakeRef.current];
       
-      // Also check body segments
-      if (validPosition) {
+      for (let snake of snakes) {
+        const distanceToHead = Math.sqrt(
+          Math.pow(newFood.x - snake.head.x, 2) + 
+          Math.pow(newFood.y - snake.head.y, 2)
+        );
+        
+        if (distanceToHead < 50) {
+          validPosition = false;
+          break;
+        }
+        
+        // Also check body segments
         for (let segment of snake.body) {
           const distanceToSegment = Math.sqrt(
             Math.pow(newFood.x - segment.x, 2) + 
@@ -89,6 +219,8 @@ const SnakeGame = () => {
             break;
           }
         }
+        
+        if (!validPosition) break;
       }
     }
     
@@ -97,85 +229,135 @@ const SnakeGame = () => {
 
   // Initialize snake body segments
   const initializeSnake = () => {
-    const body = [];
-    const startX = CANVAS_WIDTH / 2;
-    const startY = CANVAS_HEIGHT / 2;
-    const startAngle = 0; // facing right
+    const worldWidth = canvasSize.width;
+    const worldHeight = canvasSize.height;
     
-    // Create body segments properly spaced behind the head
+    // Player 1 (green) - starts on the left side facing right
+    const body1 = [];
+    const startX1 = worldWidth * 0.25;
+    const startY1 = worldHeight / 2;
+    const startAngle1 = 0; // facing right
+    
     for (let i = 1; i <= INITIAL_LENGTH; i++) {
-      body.push({
-        x: startX - (i * SEGMENT_SPACING) * Math.cos(startAngle),
-        y: startY - (i * SEGMENT_SPACING) * Math.sin(startAngle)
+      body1.push({
+        x: startX1 - (i * SEGMENT_SPACING) * Math.cos(startAngle1),
+        y: startY1 - (i * SEGMENT_SPACING) * Math.sin(startAngle1)
       });
     }
     
     snakeRef.current = {
-      head: { x: startX, y: startY },
-      angle: startAngle,
-      targetAngle: startAngle,
-      body: body,
-      length: INITIAL_LENGTH
+      head: { x: startX1, y: startY1 },
+      angle: startAngle1,
+      targetAngle: startAngle1,
+      body: body1,
+      length: INITIAL_LENGTH,
+      alive: true,
+      slowedUntil: 0,
+      shootCooldown: 0,
+      canShoot: true
     };
+    
+    // Player 2 (blue) - starts on the right side facing left
+    if (gameMode === 'multiplayer') {
+      const body2 = [];
+      const startX2 = worldWidth * 0.75;
+      const startY2 = worldHeight / 2;
+      const startAngle2 = Math.PI; // facing left
+      
+      for (let i = 1; i <= INITIAL_LENGTH; i++) {
+        body2.push({
+          x: startX2 - (i * SEGMENT_SPACING) * Math.cos(startAngle2),
+          y: startY2 - (i * SEGMENT_SPACING) * Math.sin(startAngle2)
+        });
+      }
+      
+      snake2Ref.current = {
+        head: { x: startX2, y: startY2 },
+        angle: startAngle2,
+        targetAngle: startAngle2,
+        body: body2,
+        length: INITIAL_LENGTH,
+        alive: true,
+        slowedUntil: 0,
+        shootCooldown: 0,
+        canShoot: true
+      };
+    }
+    
+    // Clear projectiles
+    projectilesRef.current = [];
     
     setGameOver(false);
     setScore(0);
+    setScore2(0);
     setSnakeLengthDisplay(INITIAL_LENGTH);
+    setSnake2LengthDisplay(INITIAL_LENGTH);
     setGameOverReason('');
-    currentSpeedRef.current = DIFFICULTY_SETTINGS[difficulty].speed; // Reset speed to base speed
+    setWinner('');
+    currentSpeedRef.current = DIFFICULTY_SETTINGS[difficulty].speed;
     setCurrentSpeedDisplay(DIFFICULTY_SETTINGS[difficulty].speed);
     generateFood();
   };
 
-  // Calculate target angle based on arrow keys (RELATIVE TURNING)
-  const updateTargetAngle = () => {
+  // Update snake movement
+  const updateSnake = (snake, isPlayer1) => {
     const keys = keysPressed.current;
     const rotationSpeed = DIFFICULTY_SETTINGS[difficulty].rotationSpeed;
     
-    // Left arrow = turn left (counter-clockwise)
-    if (keys.ArrowLeft) {
-      snakeRef.current.targetAngle -= rotationSpeed;
+    if (isPlayer1) {
+      // Arrow keys for Player 1
+      if (keys.ArrowLeft) {
+        snake.targetAngle -= rotationSpeed;
+      }
+      if (keys.ArrowRight) {
+        snake.targetAngle += rotationSpeed;
+      }
+    } else {
+      // WASD for Player 2
+      if (keys.KeyA) {
+        snake.targetAngle -= rotationSpeed;
+      }
+      if (keys.KeyD) {
+        snake.targetAngle += rotationSpeed;
+      }
     }
     
-    // Right arrow = turn right (clockwise)
-    if (keys.ArrowRight) {
-      snakeRef.current.targetAngle += rotationSpeed;
+    // Normalize target angle
+    while (snake.targetAngle > Math.PI) {
+      snake.targetAngle -= 2 * Math.PI;
+    }
+    while (snake.targetAngle < -Math.PI) {
+      snake.targetAngle += 2 * Math.PI;
     }
     
-    // Normalize target angle to -PI to PI
-    while (snakeRef.current.targetAngle > Math.PI) {
-      snakeRef.current.targetAngle -= 2 * Math.PI;
-    }
-    while (snakeRef.current.targetAngle < -Math.PI) {
-      snakeRef.current.targetAngle += 2 * Math.PI;
-    }
+    snake.angle = snake.targetAngle;
   };
 
-  // Main game loop
-  const gameLoop = () => {
-    if (gameOver || !gameStarted) return;
+  // Move snake and update body
+  const moveSnake = (snake) => {
+    if (!snake.alive) return;
     
-    const snake = snakeRef.current;
     const worldWidth = canvasSize.width;
     const worldHeight = canvasSize.height;
+    const now = Date.now();
     
-    // Update target angle based on pressed keys (relative turning)
-    updateTargetAngle();
+    // Calculate speed (apply slow effect if active)
+    let speed = currentSpeedRef.current;
+    if (now < snake.slowedUntil) {
+      speed *= SLOW_FACTOR;
+    }
     
-    // Use target angle directly (no smoothing needed for relative turning)
-    snake.angle = snake.targetAngle;
+    // Move head
+    snake.head.x += Math.cos(snake.angle) * speed;
+    snake.head.y += Math.sin(snake.angle) * speed;
     
-    // Move head forward in current direction using current speed (which increases in hard mode)
-    snake.head.x += Math.cos(snake.angle) * currentSpeedRef.current;
-    snake.head.y += Math.sin(snake.angle) * currentSpeedRef.current;
-    
-    // Wrap around screen edges using dynamic world size
+    // Wrap around screen edges
     if (snake.head.x < 0) snake.head.x = worldWidth;
     if (snake.head.x > worldWidth) snake.head.x = 0;
     if (snake.head.y < 0) snake.head.y = worldHeight;
     if (snake.head.y > worldHeight) snake.head.y = 0;
     
-    // Update body - each segment follows the one in front
+    // Update body
     const newBody = [];
     
     for (let i = 0; i < snake.length; i++) {
@@ -185,11 +367,9 @@ const SnakeGame = () => {
       if (i < snake.body.length) {
         current = snake.body[i];
       } else {
-        // New segment - start at the tail position
         current = snake.body[snake.body.length - 1] || snake.head;
       }
       
-      // Calculate direction to target, accounting for screen wrapping
       let dx = target.x - current.x;
       let dy = target.y - current.y;
       
@@ -203,13 +383,11 @@ const SnakeGame = () => {
       
       const distance = Math.sqrt(dx * dx + dy * dy);
       
-      // Move towards target maintaining spacing
       if (distance > SEGMENT_SPACING) {
         const ratio = SEGMENT_SPACING / distance;
         let newX = target.x - dx * ratio;
         let newY = target.y - dy * ratio;
         
-        // Wrap the new position if needed
         if (newX < 0) newX += worldWidth;
         if (newX > worldWidth) newX -= worldWidth;
         if (newY < 0) newY += worldHeight;
@@ -222,51 +400,191 @@ const SnakeGame = () => {
     }
     
     snake.body = newBody;
-    
-    // Check for food collision
+  };
+
+  // Check collisions
+  const checkCollisions = () => {
+    const snake1 = snakeRef.current;
+    const snake2 = snake2Ref.current;
     const food = foodRef.current;
-    const distanceToFood = Math.sqrt(
-      Math.pow(snake.head.x - food.x, 2) + 
-      Math.pow(snake.head.y - food.y, 2)
-    );
     
-    if (distanceToFood < 15) {
-      // Ate food!
-      setScore(prev => prev + 10);
-      snake.length += 5; // Grow by 5 segments - directly modify ref
-      setSnakeLengthDisplay(snake.length); // Update display
-      
-      // Increase speed in hard mode only
-      if (difficulty === 'hard') {
-        const settings = DIFFICULTY_SETTINGS.hard;
-        const newSpeed = currentSpeedRef.current + settings.speedIncrementPerFood;
-        const cappedSpeed = Math.min(newSpeed, settings.maxSpeed);
-        currentSpeedRef.current = cappedSpeed;
-        setCurrentSpeedDisplay(cappedSpeed);
-      }
-      
-      generateFood();
-    }
-    
-    // Check for self collision
-    const head = snake.head;
-    const body = snake.body;
-    
-    // Check against body segments (skip first few segments to avoid immediate collision)
-    for (let i = 5; i < body.length; i++) {
-      const segment = body[i];
-      const distance = Math.sqrt(
-        Math.pow(head.x - segment.x, 2) + 
-        Math.pow(head.y - segment.y, 2)
+    // Check Player 1 food collision
+    if (snake1.alive) {
+      const distanceToFood = Math.sqrt(
+        Math.pow(snake1.head.x - food.x, 2) + 
+        Math.pow(snake1.head.y - food.y, 2)
       );
       
-      // Collision if head is within segment radius
-      if (distance < 6) {
-        setGameOver(true);
-        setGameOverReason('You hit yourself!');
-        break;
+      if (distanceToFood < 15) {
+        setScore(prev => prev + 10);
+        snake1.length += 5;
+        setSnakeLengthDisplay(snake1.length);
+        
+        if (difficulty === 'hard') {
+          const settings = DIFFICULTY_SETTINGS.hard;
+          const newSpeed = currentSpeedRef.current + settings.speedIncrementPerFood;
+          const cappedSpeed = Math.min(newSpeed, settings.maxSpeed);
+          currentSpeedRef.current = cappedSpeed;
+          setCurrentSpeedDisplay(cappedSpeed);
+        }
+        
+        generateFood();
+      }
+      
+      // Check Player 1 self-collision
+      for (let i = 5; i < snake1.body.length; i++) {
+        const segment = snake1.body[i];
+        const distance = Math.sqrt(
+          Math.pow(snake1.head.x - segment.x, 2) + 
+          Math.pow(snake1.head.y - segment.y, 2)
+        );
+        
+        if (distance < 6) {
+          snake1.alive = false;
+          if (gameMode === 'single') {
+            setGameOver(true);
+            setGameOverReason('You hit yourself!');
+          } else {
+            setWinner('Player 2 (Blue)');
+            setGameOver(true);
+            setGameOverReason('Player 1 (Green) hit themselves!');
+          }
+          break;
+        }
+      }
+      
+      // Check Player 1 collision with Player 2 in multiplayer
+      if (gameMode === 'multiplayer' && snake2.alive) {
+        // Check collision with Player 2's head
+        const distanceToP2Head = Math.sqrt(
+          Math.pow(snake1.head.x - snake2.head.x, 2) + 
+          Math.pow(snake1.head.y - snake2.head.y, 2)
+        );
+        
+        if (distanceToP2Head < 10) {
+          // Head-on collision - both die
+          snake1.alive = false;
+          snake2.alive = false;
+          setGameOver(true);
+          setWinner('Tie');
+          setGameOverReason('Head-on collision!');
+        } else {
+          // Check collision with Player 2's body
+          for (let i = 0; i < snake2.body.length; i++) {
+            const segment = snake2.body[i];
+            const distance = Math.sqrt(
+              Math.pow(snake1.head.x - segment.x, 2) + 
+              Math.pow(snake1.head.y - segment.y, 2)
+            );
+            
+            if (distance < 6) {
+              snake1.alive = false;
+              setWinner('Player 2 (Blue)');
+              setGameOver(true);
+              setGameOverReason('Player 1 (Green) hit Player 2!');
+              break;
+            }
+          }
+        }
       }
     }
+    
+    // Check Player 2 food collision (multiplayer only)
+    if (gameMode === 'multiplayer' && snake2.alive) {
+      const distanceToFood = Math.sqrt(
+        Math.pow(snake2.head.x - food.x, 2) + 
+        Math.pow(snake2.head.y - food.y, 2)
+      );
+      
+      if (distanceToFood < 15) {
+        setScore2(prev => prev + 10);
+        snake2.length += 5;
+        setSnake2LengthDisplay(snake2.length);
+        
+        if (difficulty === 'hard') {
+          const settings = DIFFICULTY_SETTINGS.hard;
+          const newSpeed = currentSpeedRef.current + settings.speedIncrementPerFood;
+          const cappedSpeed = Math.min(newSpeed, settings.maxSpeed);
+          currentSpeedRef.current = cappedSpeed;
+          setCurrentSpeedDisplay(cappedSpeed);
+        }
+        
+        generateFood();
+      }
+      
+      // Check Player 2 self-collision
+      for (let i = 5; i < snake2.body.length; i++) {
+        const segment = snake2.body[i];
+        const distance = Math.sqrt(
+          Math.pow(snake2.head.x - segment.x, 2) + 
+          Math.pow(snake2.head.y - segment.y, 2)
+        );
+        
+        if (distance < 6) {
+          snake2.alive = false;
+          setWinner('Player 1 (Green)');
+          setGameOver(true);
+          setGameOverReason('Player 2 (Blue) hit themselves!');
+          break;
+        }
+      }
+      
+      // Check Player 2 collision with Player 1's body
+      if (snake1.alive) {
+        for (let i = 0; i < snake1.body.length; i++) {
+          const segment = snake1.body[i];
+          const distance = Math.sqrt(
+            Math.pow(snake2.head.x - segment.x, 2) + 
+            Math.pow(snake2.head.y - segment.y, 2)
+          );
+          
+          if (distance < 6) {
+            snake2.alive = false;
+            setWinner('Player 1 (Green)');
+            setGameOver(true);
+            setGameOverReason('Player 2 (Blue) hit Player 1!');
+            break;
+          }
+        }
+      }
+    }
+  };
+
+  // Main game loop
+  const gameLoop = () => {
+    if (gameOver || !gameStarted) return;
+    
+    const keys = keysPressed.current;
+    
+    // Handle shooting in multiplayer mode
+    if (gameMode === 'multiplayer') {
+      // Player 1 shoot (Arrow Up)
+      if (keys.ArrowUp && snakeRef.current.alive) {
+        shoot(snakeRef.current, 1);
+      }
+      
+      // Player 2 shoot (W)
+      if (keys.KeyW && snake2Ref.current.alive) {
+        shoot(snake2Ref.current, 2);
+      }
+    }
+    
+    // Update projectiles
+    updateProjectiles();
+    checkProjectileCollisions();
+    
+    // Update Player 1
+    updateSnake(snakeRef.current, true);
+    moveSnake(snakeRef.current);
+    
+    // Update Player 2 (multiplayer only)
+    if (gameMode === 'multiplayer') {
+      updateSnake(snake2Ref.current, false);
+      moveSnake(snake2Ref.current);
+    }
+    
+    // Check all collisions
+    checkCollisions();
     
     // Draw
     draw();
@@ -279,6 +597,8 @@ const SnakeGame = () => {
     
     const ctx = canvas.getContext('2d');
     const snake = snakeRef.current;
+    const snake2 = snake2Ref.current;
+    const now = Date.now();
     
     const worldWidth = canvasSize.width;
     const worldHeight = canvasSize.height;
@@ -303,10 +623,10 @@ const SnakeGame = () => {
       ctx.stroke();
     }
     
-    // Draw body segments
+    // Draw Player 1 (green) body segments
     for (let i = snake.body.length - 1; i >= 0; i--) {
       const segment = snake.body[i];
-      const alpha = 0.3 + (i / snake.body.length) * 0.7; // fade towards tail
+      const alpha = snake.alive ? 0.3 + (i / snake.body.length) * 0.7 : 0.2;
       
       ctx.fillStyle = `rgba(74, 222, 128, ${alpha})`;
       ctx.beginPath();
@@ -314,22 +634,89 @@ const SnakeGame = () => {
       ctx.fill();
     }
     
-    // Draw head
-    ctx.fillStyle = '#22c55e';
+    // Draw Player 1 head
+    ctx.fillStyle = snake.alive ? '#22c55e' : '#666';
     ctx.beginPath();
     ctx.arc(snake.head.x, snake.head.y, 7, 0, Math.PI * 2);
     ctx.fill();
     
-    // Draw direction indicator (small line showing where head is facing)
-    ctx.strokeStyle = '#86efac';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(snake.head.x, snake.head.y);
-    ctx.lineTo(
-      snake.head.x + Math.cos(snake.angle) * 15,
-      snake.head.y + Math.sin(snake.angle) * 15
-    );
-    ctx.stroke();
+    // Draw Player 1 slow effect indicator
+    if (snake.alive && now < snake.slowedUntil) {
+      ctx.strokeStyle = '#fbbf24';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(snake.head.x, snake.head.y, 12, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    
+    // Draw Player 1 direction indicator
+    if (snake.alive) {
+      ctx.strokeStyle = '#86efac';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(snake.head.x, snake.head.y);
+      ctx.lineTo(
+        snake.head.x + Math.cos(snake.angle) * 15,
+        snake.head.y + Math.sin(snake.angle) * 15
+      );
+      ctx.stroke();
+    }
+    
+    // Draw Player 2 (blue) in multiplayer mode
+    if (gameMode === 'multiplayer') {
+      // Draw body segments
+      for (let i = snake2.body.length - 1; i >= 0; i--) {
+        const segment = snake2.body[i];
+        const alpha = snake2.alive ? 0.3 + (i / snake2.body.length) * 0.7 : 0.2;
+        
+        ctx.fillStyle = `rgba(59, 130, 246, ${alpha})`;
+        ctx.beginPath();
+        ctx.arc(segment.x, segment.y, 5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      
+      // Draw head
+      ctx.fillStyle = snake2.alive ? '#3b82f6' : '#666';
+      ctx.beginPath();
+      ctx.arc(snake2.head.x, snake2.head.y, 7, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // Draw Player 2 slow effect indicator
+      if (snake2.alive && now < snake2.slowedUntil) {
+        ctx.strokeStyle = '#fbbf24';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(snake2.head.x, snake2.head.y, 12, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      
+      // Draw direction indicator
+      if (snake2.alive) {
+        ctx.strokeStyle = '#93c5fd';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(snake2.head.x, snake2.head.y);
+        ctx.lineTo(
+          snake2.head.x + Math.cos(snake2.angle) * 15,
+          snake2.head.y + Math.sin(snake2.angle) * 15
+        );
+        ctx.stroke();
+      }
+    }
+    
+    // Draw projectiles
+    for (let proj of projectilesRef.current) {
+      ctx.fillStyle = proj.color;
+      ctx.beginPath();
+      ctx.arc(proj.x, proj.y, 4, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // Draw glow
+      ctx.fillStyle = `${proj.color}40`;
+      ctx.beginPath();
+      ctx.arc(proj.x, proj.y, 8, 0, Math.PI * 2);
+      ctx.fill();
+    }
     
     // Draw food
     const food = foodRef.current;
@@ -348,16 +735,16 @@ const SnakeGame = () => {
   // Handle keyboard input
   useEffect(() => {
     const handleKeyDown = (e) => {
-      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+      if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'KeyA', 'KeyD', 'KeyW'].includes(e.code)) {
         e.preventDefault();
-        keysPressed.current[e.key] = true;
+        keysPressed.current[e.code] = true;
       }
     };
     
     const handleKeyUp = (e) => {
-      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+      if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'KeyA', 'KeyD', 'KeyW'].includes(e.code)) {
         e.preventDefault();
-        keysPressed.current[e.key] = false;
+        keysPressed.current[e.code] = false;
       }
     };
     
@@ -377,14 +764,14 @@ const SnakeGame = () => {
     const interval = setInterval(gameLoop, 1000 / 60); // 60 FPS
     
     return () => clearInterval(interval);
-  }, [gameStarted, gameOver]);
+  }, [gameStarted, gameOver, gameMode]);
 
   // Initial draw when game is not started
   useEffect(() => {
     if (!gameStarted) {
       draw();
     }
-  }, [gameStarted]);
+  }, [gameStarted, gameMode]);
 
   // Redraw when canvas size changes
   useEffect(() => {
@@ -416,16 +803,12 @@ const SnakeGame = () => {
       const width = window.innerWidth;
       const height = window.innerHeight;
       
-      // Leave minimal space for UI - smaller header in fullscreen
-      const availableHeight = height - 60; // Reduced from 100
-      const availableWidth = width - 20; // Reduced from 40 to use more width
+      const availableHeight = height - 60;
+      const availableWidth = width - 20;
       
-      // Use full rectangle - don't force it to be square!
       setCanvasSize({ width: availableWidth, height: availableHeight });
       
-      // Update the snake's world boundaries
       if (snakeRef.current) {
-        // Adjust snake position proportionally if it's outside new bounds
         const scaleX = availableWidth / CANVAS_WIDTH;
         const scaleY = availableHeight / CANVAS_HEIGHT;
         
@@ -437,12 +820,20 @@ const SnakeGame = () => {
           y: segment.y * scaleY
         }));
         
-        // Also scale food position
+        if (gameMode === 'multiplayer') {
+          snake2Ref.current.head.x = snake2Ref.current.head.x * scaleX;
+          snake2Ref.current.head.y = snake2Ref.current.head.y * scaleY;
+          
+          snake2Ref.current.body = snake2Ref.current.body.map(segment => ({
+            x: segment.x * scaleX,
+            y: segment.y * scaleY
+          }));
+        }
+        
         foodRef.current.x = foodRef.current.x * scaleX;
         foodRef.current.y = foodRef.current.y * scaleY;
       }
     } else {
-      // Scale back to default size
       if (snakeRef.current) {
         const scaleX = CANVAS_WIDTH / canvasSize.width;
         const scaleY = CANVAS_HEIGHT / canvasSize.height;
@@ -454,6 +845,16 @@ const SnakeGame = () => {
           x: segment.x * scaleX,
           y: segment.y * scaleY
         }));
+        
+        if (gameMode === 'multiplayer') {
+          snake2Ref.current.head.x = snake2Ref.current.head.x * scaleX;
+          snake2Ref.current.head.y = snake2Ref.current.head.y * scaleY;
+          
+          snake2Ref.current.body = snake2Ref.current.body.map(segment => ({
+            x: segment.x * scaleX,
+            y: segment.y * scaleY
+          }));
+        }
         
         foodRef.current.x = foodRef.current.x * scaleX;
         foodRef.current.y = foodRef.current.y * scaleY;
@@ -471,14 +872,11 @@ const SnakeGame = () => {
       
       setIsFullscreen(nowFullscreen);
       
-      // If exiting fullscreen and game was started, reset the game
       if (wasFullscreen && !nowFullscreen && gameStarted) {
-        // End current game
         setGameOver(true);
         setGameOverReason('Exited fullscreen - Screen size changed!');
         setGameStarted(false);
         
-        // Update canvas size after a short delay
         setTimeout(() => {
           updateCanvasSize();
         }, 100);
@@ -506,14 +904,63 @@ const SnakeGame = () => {
     <div ref={containerRef} className={`flex flex-col items-center justify-center bg-gray-900 text-white ${isFullscreen ? 'p-0 w-full h-full' : 'min-h-screen p-2'}`}>
       <div className={`flex items-center gap-6 ${isFullscreen ? 'mb-1 mt-2' : 'mb-2'}`}>
         <h1 className={`font-bold text-green-400 ${isFullscreen ? 'text-2xl' : 'text-3xl'}`}>Smooth Snake</h1>
-        <div className={`flex gap-4 ${isFullscreen ? 'text-base' : 'text-lg'}`}>
-          <span>Score: <span className="text-yellow-400 font-bold">{score}</span></span>
-          <span>Length: <span className="text-blue-400 font-bold">{snakeLengthDisplay}</span></span>
-          {/* Show speed indicator in hard mode during gameplay */}
-          {gameStarted && difficulty === 'hard' && (
-            <span>Speed: <span className="text-orange-400 font-bold">{currentSpeedDisplay.toFixed(1)}x</span></span>
-          )}
-        </div>
+        
+        {/* Single player score display */}
+        {gameMode === 'single' && (
+          <div className={`flex gap-4 ${isFullscreen ? 'text-base' : 'text-lg'}`}>
+            <span>Score: <span className="text-yellow-400 font-bold">{score}</span></span>
+            <span>Length: <span className="text-blue-400 font-bold">{snakeLengthDisplay}</span></span>
+            {gameStarted && difficulty === 'hard' && (
+              <span>Speed: <span className="text-orange-400 font-bold">{currentSpeedDisplay.toFixed(1)}x</span></span>
+            )}
+          </div>
+        )}
+        
+        {/* Multiplayer score display */}
+        {gameMode === 'multiplayer' && (
+          <div className={`flex gap-6 ${isFullscreen ? 'text-base' : 'text-lg'}`}>
+            <div className="flex flex-col items-center">
+              <span className="text-green-400 font-bold text-sm">Player 1 (Green)</span>
+              <span>Score: <span className="text-yellow-400 font-bold">{score}</span></span>
+              <span>Length: <span className="text-blue-400 font-bold">{snakeLengthDisplay}</span></span>
+            </div>
+            <div className="flex flex-col items-center">
+              <span className="text-blue-400 font-bold text-sm">Player 2 (Blue)</span>
+              <span>Score: <span className="text-yellow-400 font-bold">{score2}</span></span>
+              <span>Length: <span className="text-blue-400 font-bold">{snake2LengthDisplay}</span></span>
+            </div>
+            {gameStarted && difficulty === 'hard' && (
+              <span>Speed: <span className="text-orange-400 font-bold">{currentSpeedDisplay.toFixed(1)}x</span></span>
+            )}
+          </div>
+        )}
+        
+        {/* Game mode selector - only show when game is not started */}
+        {!gameStarted && (
+          <div className="flex gap-2 items-center">
+            <span className="text-gray-400 text-sm">Mode:</span>
+            <button
+              onClick={() => setGameMode('single')}
+              className={`px-3 py-1 rounded transition-colors text-sm ${
+                gameMode === 'single' 
+                  ? 'bg-green-600 text-white' 
+                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              }`}
+            >
+              Single Player
+            </button>
+            <button
+              onClick={() => setGameMode('multiplayer')}
+              className={`px-3 py-1 rounded transition-colors text-sm ${
+                gameMode === 'multiplayer' 
+                  ? 'bg-purple-600 text-white' 
+                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              }`}
+            >
+              Multiplayer
+            </button>
+          </div>
+        )}
         
         {/* Difficulty selector - only show when game is not started */}
         {!gameStarted && (
@@ -542,10 +989,10 @@ const SnakeGame = () => {
           </div>
         )}
         
-        {/* Show current difficulty during game */}
+        {/* Show current difficulty and mode during game */}
         {gameStarted && (
           <span className={`${isFullscreen ? 'text-sm' : 'text-base'} ${difficulty === 'hard' ? 'text-red-400' : 'text-blue-400'}`}>
-            [{DIFFICULTY_SETTINGS[difficulty].label}]
+            [{DIFFICULTY_SETTINGS[difficulty].label}] {gameMode === 'multiplayer' ? '[Multiplayer]' : ''}
           </span>
         )}
         
@@ -576,12 +1023,41 @@ const SnakeGame = () => {
             >
               Start Game
             </button>
-            <p className="mt-4 text-gray-300 text-base">
-              ← Turn Left | Turn Right →
-            </p>
-            <p className="mt-2 text-gray-400 text-sm">
-              Don't hit yourself!
-            </p>
+            {gameMode === 'single' ? (
+              <>
+                <p className="mt-4 text-gray-300 text-base">
+                  ← Turn Left | Turn Right →
+                </p>
+                <p className="mt-2 text-gray-400 text-sm">
+                  Don't hit yourself!
+                </p>
+              </>
+            ) : (
+              <>
+                <div className="mt-4 text-center">
+                  <p className="text-green-400 text-base font-bold">
+                    Player 1 (Green)
+                  </p>
+                  <p className="text-gray-300 text-sm">
+                    ← → Arrow Keys to Turn | ↑ to Shoot
+                  </p>
+                </div>
+                <div className="mt-3 text-center">
+                  <p className="text-blue-400 text-base font-bold">
+                    Player 2 (Blue)
+                  </p>
+                  <p className="text-gray-300 text-sm">
+                    A D Keys to Turn | W to Shoot
+                  </p>
+                </div>
+                <p className="mt-4 text-gray-400 text-sm">
+                  Shoot your opponent to slow them down for 1 second!
+                </p>
+                <p className="mt-1 text-gray-500 text-xs">
+                  Don't hit yourself or the other player!
+                </p>
+              </>
+            )}
           </div>
         )}
 
@@ -589,8 +1065,28 @@ const SnakeGame = () => {
         {gameOver && (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-black bg-opacity-70 rounded-lg">
             <h2 className="text-3xl font-bold text-red-400 mb-2">Game Over!</h2>
+            {winner && (
+              <p className="text-2xl font-bold text-yellow-400 mb-2">
+                {winner === 'Tie' ? "It's a Tie!" : `${winner} Wins!`}
+              </p>
+            )}
             <p className="text-lg text-red-300 mb-2">{gameOverReason}</p>
-            <p className="text-2xl mb-6">Final Score: <span className="text-yellow-400 font-bold">{score}</span></p>
+            
+            {gameMode === 'single' ? (
+              <p className="text-2xl mb-6">Final Score: <span className="text-yellow-400 font-bold">{score}</span></p>
+            ) : (
+              <div className="flex gap-8 mb-6">
+                <div className="text-center">
+                  <p className="text-green-400 font-bold">Player 1</p>
+                  <p className="text-xl">Score: <span className="text-yellow-400 font-bold">{score}</span></p>
+                </div>
+                <div className="text-center">
+                  <p className="text-blue-400 font-bold">Player 2</p>
+                  <p className="text-xl">Score: <span className="text-yellow-400 font-bold">{score2}</span></p>
+                </div>
+              </div>
+            )}
+            
             <button 
               onClick={restartGame}
               className="px-8 py-4 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg transition-colors text-xl shadow-lg"
@@ -599,8 +1095,6 @@ const SnakeGame = () => {
             </button>
           </div>
         )}
-
-        
       </div>
     </div>
   );
