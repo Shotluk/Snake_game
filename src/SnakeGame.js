@@ -12,6 +12,44 @@ const SHOOT_COOLDOWN = 1000; // milliseconds between shots
 const SLOW_DURATION = 1000; // milliseconds of slow effect
 const SLOW_FACTOR = 0; // speed multiplier when slowed (40% speed)
 
+// Food mechanics
+const SPEED_BOOST_DURATION = 5000; // milliseconds of speed boost effect
+const SPEED_BOOST_MULTIPLIER = 1.5; // 50% speed increase
+const MAX_FOODS_ON_SCREEN = 3; // Maximum number of foods at once
+const FOOD_SPAWN_INTERVAL = 3000; // milliseconds between food spawns
+
+// Food types configuration
+const FOOD_TYPES = {
+  regular: {
+    points: 10,
+    lengthBonus: 5,
+    color: '#ef4444', // red
+    glowColor: 'rgba(239, 68, 68, 0.3)',
+    size: 8,
+    spawnChance: 0.65, // 65% chance
+    label: 'Regular'
+  },
+  golden: {
+    points: 20,
+    lengthBonus: 10, // 2x length
+    color: '#fbbf24', // gold
+    glowColor: 'rgba(251, 191, 36, 0.4)',
+    size: 10,
+    spawnChance: 0.15, // 15% chance (rare)
+    label: 'Golden'
+  },
+  speed: {
+    points: 15,
+    lengthBonus: 5,
+    speedBoost: true,
+    color: '#3b82f6', // blue
+    glowColor: 'rgba(59, 130, 246, 0.4)',
+    size: 8,
+    spawnChance: 0.20, // 20% chance
+    label: 'Speed'
+  }
+};
+
 // Difficulty settings - easily configurable
 const DIFFICULTY_SETTINGS = {
   easy: {
@@ -56,10 +94,11 @@ const SnakeGame = () => {
     length: INITIAL_LENGTH, // actual length
     alive: true,
     slowedUntil: 0, // timestamp when slow effect ends
+    speedBoostedUntil: 0, // timestamp when speed boost ends
     shootCooldown: 0, // timestamp when can shoot again
     canShoot: true
   });
-  
+
   // Player 2 snake (blue snake)
   const snake2Ref = useRef({
     head: { x: CANVAS_WIDTH / 2, y: CANVAS_HEIGHT / 2 },
@@ -69,11 +108,13 @@ const SnakeGame = () => {
     length: INITIAL_LENGTH,
     alive: true,
     slowedUntil: 0,
+    speedBoostedUntil: 0,
     shootCooldown: 0,
     canShoot: true
   });
-  
-  const foodRef = useRef({ x: 0, y: 0 });
+
+  const foodRef = useRef([]); // Array of food objects
+  const lastFoodSpawnRef = useRef(0); // Track when last food was spawned
   
   // Projectiles array
   const projectilesRef = useRef([]);
@@ -178,40 +219,63 @@ const SnakeGame = () => {
     });
   };
 
-  // Generate food at random position (avoiding both snakes)
+  // Determine food type based on rarity
+  const getFoodType = () => {
+    const rand = Math.random();
+    let cumulative = 0;
+
+    for (let type in FOOD_TYPES) {
+      cumulative += FOOD_TYPES[type].spawnChance;
+      if (rand < cumulative) {
+        return type;
+      }
+    }
+
+    return 'regular'; // fallback
+  };
+
+  // Generate food at random position (avoiding both snakes and other food)
   const generateFood = () => {
+    // Don't generate if we already have max foods
+    if (foodRef.current.length >= MAX_FOODS_ON_SCREEN) {
+      return;
+    }
+
     let newFood;
     let validPosition = false;
-    
+
     const worldWidth = canvasSize.width;
     const worldHeight = canvasSize.height;
-    
+    const foodType = getFoodType();
+
     while (!validPosition) {
       newFood = {
         x: Math.random() * (worldWidth - 40) + 20,
-        y: Math.random() * (worldHeight - 40) + 20
+        y: Math.random() * (worldHeight - 40) + 20,
+        type: foodType,
+        id: Date.now() + Math.random() // unique identifier
       };
-      
+
       validPosition = true;
-      
+
       // Check distance to both snakes
       const snakes = gameMode === 'multiplayer' ? [snakeRef.current, snake2Ref.current] : [snakeRef.current];
-      
+
       for (let snake of snakes) {
         const distanceToHead = Math.sqrt(
-          Math.pow(newFood.x - snake.head.x, 2) + 
+          Math.pow(newFood.x - snake.head.x, 2) +
           Math.pow(newFood.y - snake.head.y, 2)
         );
-        
+
         if (distanceToHead < 50) {
           validPosition = false;
           break;
         }
-        
+
         // Also check body segments
         for (let segment of snake.body) {
           const distanceToSegment = Math.sqrt(
-            Math.pow(newFood.x - segment.x, 2) + 
+            Math.pow(newFood.x - segment.x, 2) +
             Math.pow(newFood.y - segment.y, 2)
           );
           if (distanceToSegment < 30) {
@@ -219,12 +283,25 @@ const SnakeGame = () => {
             break;
           }
         }
-        
+
         if (!validPosition) break;
       }
+
+      // Check distance to other foods
+      for (let existingFood of foodRef.current) {
+        const distanceToFood = Math.sqrt(
+          Math.pow(newFood.x - existingFood.x, 2) +
+          Math.pow(newFood.y - existingFood.y, 2)
+        );
+        if (distanceToFood < 40) {
+          validPosition = false;
+          break;
+        }
+      }
     }
-    
-    foodRef.current = newFood;
+
+    foodRef.current.push(newFood);
+    lastFoodSpawnRef.current = Date.now();
   };
 
   // Initialize snake body segments
@@ -253,6 +330,7 @@ const SnakeGame = () => {
       length: INITIAL_LENGTH,
       alive: true,
       slowedUntil: 0,
+      speedBoostedUntil: 0,
       shootCooldown: 0,
       canShoot: true
     };
@@ -279,14 +357,19 @@ const SnakeGame = () => {
         length: INITIAL_LENGTH,
         alive: true,
         slowedUntil: 0,
+        speedBoostedUntil: 0,
         shootCooldown: 0,
         canShoot: true
       };
     }
-    
+
     // Clear projectiles
     projectilesRef.current = [];
-    
+
+    // Clear and initialize food
+    foodRef.current = [];
+    lastFoodSpawnRef.current = Date.now();
+
     setGameOver(false);
     setScore(0);
     setScore2(0);
@@ -296,6 +379,8 @@ const SnakeGame = () => {
     setWinner('');
     currentSpeedRef.current = DIFFICULTY_SETTINGS[difficulty].speed;
     setCurrentSpeedDisplay(DIFFICULTY_SETTINGS[difficulty].speed);
+
+    // Generate initial food
     generateFood();
   };
 
@@ -336,15 +421,17 @@ const SnakeGame = () => {
   // Move snake and update body
   const moveSnake = (snake) => {
     if (!snake.alive) return;
-    
+
     const worldWidth = canvasSize.width;
     const worldHeight = canvasSize.height;
     const now = Date.now();
-    
-    // Calculate speed (apply slow effect if active)
+
+    // Calculate speed (apply slow effect if active, or speed boost)
     let speed = currentSpeedRef.current;
     if (now < snake.slowedUntil) {
       speed *= SLOW_FACTOR;
+    } else if (now < snake.speedBoostedUntil) {
+      speed *= SPEED_BOOST_MULTIPLIER;
     }
     
     // Move head
@@ -406,29 +493,43 @@ const SnakeGame = () => {
   const checkCollisions = () => {
     const snake1 = snakeRef.current;
     const snake2 = snake2Ref.current;
-    const food = foodRef.current;
-    
+    const foods = foodRef.current;
+    const now = Date.now();
+
     // Check Player 1 food collision
     if (snake1.alive) {
-      const distanceToFood = Math.sqrt(
-        Math.pow(snake1.head.x - food.x, 2) + 
-        Math.pow(snake1.head.y - food.y, 2)
-      );
-      
-      if (distanceToFood < 15) {
-        setScore(prev => prev + 10);
-        snake1.length += 5;
-        setSnakeLengthDisplay(snake1.length);
-        
-        if (difficulty === 'hard') {
-          const settings = DIFFICULTY_SETTINGS.hard;
-          const newSpeed = currentSpeedRef.current + settings.speedIncrementPerFood;
-          const cappedSpeed = Math.min(newSpeed, settings.maxSpeed);
-          currentSpeedRef.current = cappedSpeed;
-          setCurrentSpeedDisplay(cappedSpeed);
+      for (let i = foods.length - 1; i >= 0; i--) {
+        const food = foods[i];
+        const foodConfig = FOOD_TYPES[food.type];
+        const distanceToFood = Math.sqrt(
+          Math.pow(snake1.head.x - food.x, 2) +
+          Math.pow(snake1.head.y - food.y, 2)
+        );
+
+        if (distanceToFood < 15) {
+          // Apply food effects
+          setScore(prev => prev + foodConfig.points);
+          snake1.length += foodConfig.lengthBonus;
+          setSnakeLengthDisplay(snake1.length);
+
+          // Apply speed boost if it's a speed fruit
+          if (foodConfig.speedBoost) {
+            snake1.speedBoostedUntil = now + SPEED_BOOST_DURATION;
+          }
+
+          // Increase speed in hard mode
+          if (difficulty === 'hard') {
+            const settings = DIFFICULTY_SETTINGS.hard;
+            const newSpeed = currentSpeedRef.current + settings.speedIncrementPerFood;
+            const cappedSpeed = Math.min(newSpeed, settings.maxSpeed);
+            currentSpeedRef.current = cappedSpeed;
+            setCurrentSpeedDisplay(cappedSpeed);
+          }
+
+          // Remove the eaten food
+          foodRef.current.splice(i, 1);
+          break; // Only eat one food per frame
         }
-        
-        generateFood();
       }
       
       // Check Player 1 self-collision
@@ -491,25 +592,38 @@ const SnakeGame = () => {
     
     // Check Player 2 food collision (multiplayer only)
     if (gameMode === 'multiplayer' && snake2.alive) {
-      const distanceToFood = Math.sqrt(
-        Math.pow(snake2.head.x - food.x, 2) + 
-        Math.pow(snake2.head.y - food.y, 2)
-      );
-      
-      if (distanceToFood < 15) {
-        setScore2(prev => prev + 10);
-        snake2.length += 5;
-        setSnake2LengthDisplay(snake2.length);
-        
-        if (difficulty === 'hard') {
-          const settings = DIFFICULTY_SETTINGS.hard;
-          const newSpeed = currentSpeedRef.current + settings.speedIncrementPerFood;
-          const cappedSpeed = Math.min(newSpeed, settings.maxSpeed);
-          currentSpeedRef.current = cappedSpeed;
-          setCurrentSpeedDisplay(cappedSpeed);
+      for (let i = foods.length - 1; i >= 0; i--) {
+        const food = foods[i];
+        const foodConfig = FOOD_TYPES[food.type];
+        const distanceToFood = Math.sqrt(
+          Math.pow(snake2.head.x - food.x, 2) +
+          Math.pow(snake2.head.y - food.y, 2)
+        );
+
+        if (distanceToFood < 15) {
+          // Apply food effects
+          setScore2(prev => prev + foodConfig.points);
+          snake2.length += foodConfig.lengthBonus;
+          setSnake2LengthDisplay(snake2.length);
+
+          // Apply speed boost if it's a speed fruit
+          if (foodConfig.speedBoost) {
+            snake2.speedBoostedUntil = now + SPEED_BOOST_DURATION;
+          }
+
+          // Increase speed in hard mode
+          if (difficulty === 'hard') {
+            const settings = DIFFICULTY_SETTINGS.hard;
+            const newSpeed = currentSpeedRef.current + settings.speedIncrementPerFood;
+            const cappedSpeed = Math.min(newSpeed, settings.maxSpeed);
+            currentSpeedRef.current = cappedSpeed;
+            setCurrentSpeedDisplay(cappedSpeed);
+          }
+
+          // Remove the eaten food
+          foodRef.current.splice(i, 1);
+          break; // Only eat one food per frame
         }
-        
-        generateFood();
       }
       
       // Check Player 2 self-collision
@@ -553,36 +667,42 @@ const SnakeGame = () => {
   // Main game loop
   const gameLoop = () => {
     if (gameOver || !gameStarted) return;
-    
+
     const keys = keysPressed.current;
-    
+    const now = Date.now();
+
+    // Spawn new food periodically
+    if (now - lastFoodSpawnRef.current > FOOD_SPAWN_INTERVAL) {
+      generateFood();
+    }
+
     // Handle shooting in multiplayer mode
     if (gameMode === 'multiplayer') {
       // Player 1 shoot (Arrow Up)
       if (keys.ArrowUp && snakeRef.current.alive) {
         shoot(snakeRef.current, 1);
       }
-      
+
       // Player 2 shoot (W)
       if (keys.KeyW && snake2Ref.current.alive) {
         shoot(snake2Ref.current, 2);
       }
     }
-    
+
     // Update projectiles
     updateProjectiles();
     checkProjectileCollisions();
-    
+
     // Update Player 1
     updateSnake(snakeRef.current, true);
     moveSnake(snakeRef.current);
-    
+
     // Update Player 2 (multiplayer only)
     if (gameMode === 'multiplayer') {
       updateSnake(snake2Ref.current, false);
       moveSnake(snake2Ref.current);
     }
-    
+
     // Check all collisions
     checkCollisions();
     
@@ -648,6 +768,15 @@ const SnakeGame = () => {
       ctx.arc(snake.head.x, snake.head.y, 12, 0, Math.PI * 2);
       ctx.stroke();
     }
+
+    // Draw Player 1 speed boost indicator
+    if (snake.alive && now < snake.speedBoostedUntil) {
+      ctx.strokeStyle = '#3b82f6';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(snake.head.x, snake.head.y, 15, 0, Math.PI * 2);
+      ctx.stroke();
+    }
     
     // Draw Player 1 direction indicator
     if (snake.alive) {
@@ -689,6 +818,15 @@ const SnakeGame = () => {
         ctx.arc(snake2.head.x, snake2.head.y, 12, 0, Math.PI * 2);
         ctx.stroke();
       }
+
+      // Draw Player 2 speed boost indicator
+      if (snake2.alive && now < snake2.speedBoostedUntil) {
+        ctx.strokeStyle = '#3b82f6';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(snake2.head.x, snake2.head.y, 15, 0, Math.PI * 2);
+        ctx.stroke();
+      }
       
       // Draw direction indicator
       if (snake2.alive) {
@@ -718,18 +856,46 @@ const SnakeGame = () => {
       ctx.fill();
     }
     
-    // Draw food
-    const food = foodRef.current;
-    ctx.fillStyle = '#ef4444';
-    ctx.beginPath();
-    ctx.arc(food.x, food.y, 8, 0, Math.PI * 2);
-    ctx.fill();
-    
-    // Food glow effect
-    ctx.fillStyle = 'rgba(239, 68, 68, 0.3)';
-    ctx.beginPath();
-    ctx.arc(food.x, food.y, 12, 0, Math.PI * 2);
-    ctx.fill();
+    // Draw all foods
+    for (let food of foodRef.current) {
+      const foodConfig = FOOD_TYPES[food.type];
+
+      // Draw food main circle
+      ctx.fillStyle = foodConfig.color;
+      ctx.beginPath();
+      ctx.arc(food.x, food.y, foodConfig.size, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Food glow effect
+      ctx.fillStyle = foodConfig.glowColor;
+      ctx.beginPath();
+      ctx.arc(food.x, food.y, foodConfig.size + 4, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Add special visual effects for special food types
+      if (food.type === 'golden') {
+        // Add a sparkle effect for golden fruit
+        ctx.strokeStyle = '#fef08a';
+        ctx.lineWidth = 1.5;
+        for (let i = 0; i < 4; i++) {
+          const angle = (i * Math.PI / 2) + (Date.now() / 500);
+          ctx.beginPath();
+          ctx.moveTo(food.x, food.y);
+          ctx.lineTo(
+            food.x + Math.cos(angle) * 15,
+            food.y + Math.sin(angle) * 15
+          );
+          ctx.stroke();
+        }
+      } else if (food.type === 'speed') {
+        // Add lightning bolt effect for speed fruit
+        ctx.strokeStyle = '#93c5fd';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(food.x, food.y, foodConfig.size + 2, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
   };
 
   // Handle keyboard input
@@ -817,31 +983,35 @@ const SnakeGame = () => {
       const availableWidth = width - 20;
       
       setCanvasSize({ width: availableWidth, height: availableHeight });
-      
+
       if (snakeRef.current) {
         const scaleX = availableWidth / CANVAS_WIDTH;
         const scaleY = availableHeight / CANVAS_HEIGHT;
-        
+
         snakeRef.current.head.x = snakeRef.current.head.x * scaleX;
         snakeRef.current.head.y = snakeRef.current.head.y * scaleY;
-        
+
         snakeRef.current.body = snakeRef.current.body.map(segment => ({
           x: segment.x * scaleX,
           y: segment.y * scaleY
         }));
-        
+
         if (gameMode === 'multiplayer') {
           snake2Ref.current.head.x = snake2Ref.current.head.x * scaleX;
           snake2Ref.current.head.y = snake2Ref.current.head.y * scaleY;
-          
+
           snake2Ref.current.body = snake2Ref.current.body.map(segment => ({
             x: segment.x * scaleX,
             y: segment.y * scaleY
           }));
         }
-        
-        foodRef.current.x = foodRef.current.x * scaleX;
-        foodRef.current.y = foodRef.current.y * scaleY;
+
+        // Scale all food positions
+        foodRef.current = foodRef.current.map(food => ({
+          ...food,
+          x: food.x * scaleX,
+          y: food.y * scaleY
+        }));
       }
     } else {
       if (snakeRef.current) {
@@ -859,17 +1029,21 @@ const SnakeGame = () => {
         if (gameMode === 'multiplayer') {
           snake2Ref.current.head.x = snake2Ref.current.head.x * scaleX;
           snake2Ref.current.head.y = snake2Ref.current.head.y * scaleY;
-          
+
           snake2Ref.current.body = snake2Ref.current.body.map(segment => ({
             x: segment.x * scaleX,
             y: segment.y * scaleY
           }));
         }
-        
-        foodRef.current.x = foodRef.current.x * scaleX;
-        foodRef.current.y = foodRef.current.y * scaleY;
+
+        // Scale all food positions
+        foodRef.current = foodRef.current.map(food => ({
+          ...food,
+          x: food.x * scaleX,
+          y: food.y * scaleY
+        }));
       }
-      
+
       setCanvasSize({ width: CANVAS_WIDTH, height: CANVAS_HEIGHT });
     }
   };
