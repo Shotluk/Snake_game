@@ -739,23 +739,33 @@ const SnakeGame = () => {
         e.preventDefault();
         keysPressed.current[e.code] = true;
       }
+
+      // Handle Enter key for starting/restarting game
+      if (e.code === 'Enter') {
+        e.preventDefault();
+        if (gameOver) {
+          restartGame();
+        } else if (!gameStarted) {
+          startGame();
+        }
+      }
     };
-    
+
     const handleKeyUp = (e) => {
       if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'KeyA', 'KeyD', 'KeyW'].includes(e.code)) {
         e.preventDefault();
         keysPressed.current[e.code] = false;
       }
     };
-    
+
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
-    
+
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, []);
+  }, [gameOver, gameStarted]);
 
   // Game loop effect
   useEffect(() => {
@@ -1017,12 +1027,13 @@ const SnakeGame = () => {
         {/* Overlay: Start screen */}
         {!gameStarted && !gameOver && (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-black bg-opacity-60 rounded-lg">
-            <button 
+            <button
               onClick={startGame}
               className="px-8 py-4 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg transition-colors text-xl shadow-lg"
             >
               Start Game
             </button>
+            <p className="mt-2 text-gray-400 text-sm">Press Enter to start</p>
             {gameMode === 'single' ? (
               <>
                 <p className="mt-4 text-gray-300 text-base">
@@ -1087,12 +1098,13 @@ const SnakeGame = () => {
               </div>
             )}
             
-            <button 
+            <button
               onClick={restartGame}
               className="px-8 py-4 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg transition-colors text-xl shadow-lg"
             >
               Play Again
             </button>
+            <p className="mt-2 text-gray-400 text-sm">Press Enter to restart</p>
           </div>
         )}
       </div>
